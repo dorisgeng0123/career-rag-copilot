@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { PrivacyBanner } from './components/PrivacyBanner';
 import { AssetOverview } from './components/AssetOverview';
@@ -123,6 +123,7 @@ export default function App() {
   const [questionSource, setQuestionSource] = useState<'auto' | 'recommendation' | 'manual'>('auto');
   const [directAnswer, setDirectAnswer] = useState<GroundedAnswer | null>(null);
   const [isGeneratingMode, setIsGeneratingMode] = useState<'direct' | null>(null);
+  const answerAbortRef = useRef<AbortController | null>(null);
 
   // Modals & Drawers State
   const [isAssetDrawerOpen, setIsAssetDrawerOpen] = useState<boolean>(false);
@@ -159,11 +160,15 @@ export default function App() {
     currentQuestion: string,
     currentDocs: AssetDocument[]
   ) => {
+    answerAbortRef.current?.abort();
+    const controller = new AbortController();
+    answerAbortRef.current = controller;
     setIsGeneratingMode('direct');
     try {
       const res = await fetch('/api/rag-answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           taskMode: mode,
           question: currentQuestion,
@@ -189,31 +194,28 @@ export default function App() {
       }
       throw new Error('Fallback to local engine');
     } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        return;
+      }
       console.log('Using local dynamic RAG engine:', err);
       // Fallback local engine that uses active JD, question and documents
       const fallback = simulateRAGGeneration(mode, currentJd, currentQuestion, currentDocs);
       setDirectAnswer({ ...fallback, answerMode: 'direct' });
     } finally {
-      setIsGeneratingMode(null);
+      if (answerAbortRef.current === controller) {
+        answerAbortRef.current = null;
+        setIsGeneratingMode(null);
+      }
     }
   };
 
   // Mode change handler
   const handleSelectMode = (newMode: TaskMode) => {
     setCurrentMode(newMode);
-    setQuestionSource('auto');
-
-    if (!jdContext) {
+    setDirectAnswer(null);
+    if (questionSource !== 'manual') {
       setQuestion('');
-      setDirectAnswer(null);
-      return;
-    }
-
-    const tailoredQuestions = getRecommendedQuestions(newMode, jdContext);
-    const newDefaultQ = tailoredQuestions[0] || '';
-    setQuestion(newDefaultQ);
-    if (newDefaultQ) {
-      fetchOrGenerateAnswer(newMode, jdContext, newDefaultQ, documents);
+      setQuestionSource('auto');
     }
   };
 
@@ -276,22 +278,14 @@ export default function App() {
 
     setJdContext(freshJD);
     setDirectAnswer(null);
-    const tailoredQuestions = getRecommendedQuestions(currentMode, freshJD);
     const shouldKeepManualQuestion = questionSource === 'manual' && question.trim().length > 0;
-    const newQuestion = shouldKeepManualQuestion
-      ? question.trim()
-      : tailoredQuestions[0] || '';
-    setQuestion(newQuestion);
-    if (!shouldKeepManualQuestion) {
+    if (shouldKeepManualQuestion) {
+      setQuestion(question.trim());
+    } else {
+      setQuestion('');
       setQuestionSource('auto');
     }
-    
-    // Automatically re-generate answer with the fresh JD context & new tailored question
-    if (newQuestion) {
-      fetchOrGenerateAnswer(currentMode, freshJD, newQuestion, documents);
-    } else {
-      setDirectAnswer(null);
-    }
+    setDirectAnswer(null);
   };
 
   const handleSetQuestion = (nextQuestion: string) => {
@@ -310,6 +304,12 @@ export default function App() {
       return;
     }
     fetchOrGenerateAnswer(currentMode, jdContext, currentQ, documents);
+  };
+
+  const handleCancelGenerateAnswer = () => {
+    answerAbortRef.current?.abort();
+    answerAbortRef.current = null;
+    setIsGeneratingMode(null);
   };
 
   return (
@@ -352,6 +352,7 @@ export default function App() {
             onSetQuestion={handleSetQuestion}
             onParseJD={handleParseJD}
             onGenerateAnswer={handleGenerateAnswer}
+            onCancelGenerateAnswer={handleCancelGenerateAnswer}
           />
         </section>
 

@@ -5,7 +5,8 @@ import {
   Check,
   Volume2,
   ExternalLink,
-  BookmarkCheck
+  BookmarkCheck,
+  AlertTriangle
 } from 'lucide-react';
 import { GroundedAnswer } from '../types';
 
@@ -21,6 +22,13 @@ export const AnswerResultSection: React.FC<AnswerResultSectionProps> = ({
   const [copied, setCopied] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const contextBuckets = answer.contextBuckets;
+  const fallbackReason = (answer.pipelineTrace.generation as any).fallbackReason;
+  const isModelFallback = Boolean(fallbackReason)
+    || /fallback|local/i.test(answer.pipelineTrace.generation.model || '')
+    || /模型直答不可用|Direct 模型调用失败|direct.*failed/i.test([
+      answer.strategy,
+      ...answer.riskNotices,
+    ].join('\n'));
   const generationPipelineCards = [
     {
       title: '1. JD 结构化',
@@ -120,6 +128,25 @@ export const AnswerResultSection: React.FC<AnswerResultSectionProps> = ({
           </button>
         </div>
       </div>
+
+      {isModelFallback && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-xs flex items-start space-x-3 shadow-xs">
+          <div className="p-1.5 rounded-xl bg-amber-600 text-white mt-0.5 shrink-0">
+            <AlertTriangle className="w-4 h-4" />
+          </div>
+          <div className="space-y-1">
+            <div className="font-bold text-amber-950">模型直答不可用，当前展示本地兜底草稿</div>
+            <p className="text-amber-900 leading-relaxed">
+              本次没有拿到线上模型生成结果，系统改用本地规则和已召回素材生成口语化草稿。常见原因是 Render 环境变量未配置、API Key 无效、模型额度或资源包不可用，或部署环境无法连接模型接口。
+            </p>
+            {fallbackReason && (
+              <p className="text-[11px] text-amber-800 font-mono break-words">
+                fallback reason: {String(fallbackReason)}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-100 text-xs flex items-start space-x-3">
         <div className="p-1 rounded-lg bg-indigo-600 text-white mt-0.5 shrink-0">

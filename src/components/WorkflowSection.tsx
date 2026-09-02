@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { 
   FileSearch, 
   Upload, 
@@ -34,6 +34,7 @@ interface WorkflowSectionProps {
   onSetQuestion: (q: string) => void;
   onParseJD: (parsedJD: JDContext) => void;
   onGenerateAnswer: () => void;
+  onCancelGenerateAnswer: () => void;
 }
 
 export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
@@ -44,7 +45,8 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
   generatingMode,
   onSetQuestion,
   onParseJD,
-  onGenerateAnswer
+  onGenerateAnswer,
+  onCancelGenerateAnswer
 }) => {
   const modeConfig = TASK_MODE_CONFIG[currentMode];
 
@@ -63,6 +65,10 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
   const [parseError, setParseError] = useState<string | null>(null);
   const [parseEngineNote, setParseEngineNote] = useState<string | null>(null);
   const [aiRecommendedQuestions, setAiRecommendedQuestions] = useState<string[]>([]);
+  const [hasGeneratedQuestions, setHasGeneratedQuestions] = useState<boolean>(false);
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState<boolean>(false);
+  const parseAbortRef = useRef<AbortController | null>(null);
+  const recommendAbortRef = useRef<AbortController | null>(null);
 
   const handleSelectPreset = (key: string) => {
     setSelectedPresetKey(key);
@@ -71,6 +77,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
     setUploadedScreenshotPreview(null);
     setPastedJdText(targetJD.rawText || '');
     setHasParsedCurrentJD(false);
+    setHasGeneratedQuestions(false);
     setAiRecommendedQuestions([]);
     setParseEngineNote(null);
   };
@@ -84,6 +91,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
       reader.onload = () => {
         setUploadedScreenshotPreview(reader.result as string);
         setHasParsedCurrentJD(false);
+        setHasGeneratedQuestions(false);
         setAiRecommendedQuestions([]);
         setParseEngineNote(null);
       };
@@ -95,42 +103,61 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
     return getRecommendedQuestions(currentMode, jdContext);
   }, [currentMode, jdContext?.id, jdContext?.companyName, jdContext?.roleTitle, jdContext?.parsedAt]);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!jdContext) {
-      setAiRecommendedQuestions([]);
-      return;
-    }
+  const handleGenerateQuestions = async () => {
+    if (!jdContext || isGeneratingQuestions) return;
 
+    recommendAbortRef.current?.abort();
+    const controller = new AbortController();
+    recommendAbortRef.current = controller;
+    setIsGeneratingQuestions(true);
+    setHasGeneratedQuestions(true);
     setAiRecommendedQuestions(fallbackQuestions);
-    fetch('/api/recommend-questions', {
+
+    try {
+      const res = await fetch('/api/recommend-questions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({ taskMode: currentMode, jdContext })
-    })
-      .then(res => res.ok ? res.json() : Promise.reject(new Error(`recommend failed: ${res.status}`)))
-      .then(data => {
-        if (!cancelled && Array.isArray(data.questions) && data.questions.length > 0) {
-          setAiRecommendedQuestions(data.questions);
-        }
-      })
-      .catch(err => {
-        console.warn('AI question recommendation failed, using local JD-linked questions:', err);
-        if (!cancelled) setAiRecommendedQuestions(fallbackQuestions);
       });
+      if (!res.ok) throw new Error(`recommend failed: ${res.status}`);
+      const data = await res.json();
+      if (Array.isArray(data.questions) && data.questions.length > 0) {
+        setAiRecommendedQuestions(data.questions);
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        console.warn('AI question recommendation failed, using local JD-linked questions:', err);
+        setAiRecommendedQuestions(fallbackQuestions);
+      }
+    } finally {
+      if (recommendAbortRef.current === controller) {
+        recommendAbortRef.current = null;
+        setIsGeneratingQuestions(false);
+      }
+    }
+  };
 
-    return () => {
-      cancelled = true;
-    };
-  }, [currentMode, jdContext?.id, jdContext?.companyName, jdContext?.roleTitle, jdContext?.parsedAt, fallbackQuestions]);
+  const handleCancelQuestions = () => {
+    recommendAbortRef.current?.abort();
+    recommendAbortRef.current = null;
+    setIsGeneratingQuestions(false);
+    setHasGeneratedQuestions(false);
+    setAiRecommendedQuestions([]);
+  };
 
   // Recommended questions dynamically derived from current mode and active JDContext
-  const dynamicQuestions = hasParsedCurrentJD && jdContext ? (aiRecommendedQuestions.length > 0 ? aiRecommendedQuestions : fallbackQuestions) : [];
+  const dynamicQuestions = hasParsedCurrentJD && hasGeneratedQuestions && jdContext ? (aiRecommendedQuestions.length > 0 ? aiRecommendedQuestions : fallbackQuestions) : [];
 
   const handleTriggerParse = async () => {
+    parseAbortRef.current?.abort();
+    const controller = new AbortController();
+    parseAbortRef.current = controller;
     setIsParsingJD(true);
     setParseError(null);
     setParseEngineNote(null);
+    setHasGeneratedQuestions(false);
+    setAiRecommendedQuestions([]);
 
     try {
       let payload: any = {};
@@ -167,6 +194,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
       const res = await fetch('/api/parse-jd', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify(payload)
       });
 
@@ -198,6 +226,10 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
       }
       throw new Error('Invalid parse payload from server, using smart client-side parser');
     } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        setParseError('已中断本次 JD 解析。');
+        return;
+      }
       console.warn('Real API parse failed or local smart engine triggered:', err);
       if (jdInputMode === 'screenshot' && uploadedScreenshotPreview) {
         setParseError(`截图没有成功解析：${err?.message || '当前 OCR / 模型接口不可用或识别置信度不足。'} 已停止生成兜底 JD，请改用文本 JD 或修复模型连接后重试。`);
@@ -220,8 +252,18 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
       setHasParsedCurrentJD(true);
       setParseEngineNote(`本地智能解析已抽取【${parsedJD.companyName}】岗位上下文`);
     } finally {
-      setIsParsingJD(false);
+      if (parseAbortRef.current === controller) {
+        parseAbortRef.current = null;
+        setIsParsingJD(false);
+      }
     }
+  };
+
+  const handleCancelParse = () => {
+    parseAbortRef.current?.abort();
+    parseAbortRef.current = null;
+    setIsParsingJD(false);
+    setParseError('已中断本次 JD 解析。');
   };
 
   return (
@@ -426,6 +468,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
 3. 搭建基于 Ragas 的自动化评估指标体系，将大模型幻觉率控制在 1.5% 以内；
 4. 协同工程算法团队，推动客服与中台业务一次性解决率大幅提升。`);
                     setHasParsedCurrentJD(false);
+                    setHasGeneratedQuestions(false);
                     setAiRecommendedQuestions([]);
                   }}
                   className="text-[11px] text-indigo-600 hover:underline font-medium"
@@ -439,6 +482,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                 onChange={(e) => {
                   setPastedJdText(e.target.value);
                   setHasParsedCurrentJD(false);
+                  setHasGeneratedQuestions(false);
                   setAiRecommendedQuestions([]);
                 }}
                 placeholder="在此粘贴任意真实岗位 JD 文本（包含公司名、职责、任职要求等）..."
@@ -484,6 +528,16 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                 </>
               )}
             </button>
+            {isParsingJD && (
+              <button
+                type="button"
+                onClick={handleCancelParse}
+                className="w-full mt-2 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center justify-center space-x-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200"
+              >
+                <AlertCircle className="w-4 h-4" />
+                <span>中断此次 JD 解析</span>
+              </button>
+            )}
             {!hasParsedCurrentJD && (
               <p className="text-[11px] text-amber-700 font-medium text-center mt-1.5 flex items-center justify-center space-x-1">
                 <span>⚠️ 规范约束：上传或更改后请点击上方按钮完成结构化解析</span>
@@ -618,12 +672,29 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                   针对【{jdContext?.companyName || '目标岗位'}】定制
                 </span>
               </label>
-              <span className="text-[10px] text-slate-500">点击一键填入</span>
+              {isGeneratingQuestions ? (
+                <button
+                  type="button"
+                  onClick={handleCancelQuestions}
+                  className="text-[10px] text-rose-600 hover:underline font-bold"
+                >
+                  中断推荐生成
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleGenerateQuestions}
+                  disabled={!hasParsedCurrentJD || !jdContext}
+                  className="text-[10px] text-indigo-600 hover:underline font-bold disabled:text-slate-400 disabled:no-underline disabled:cursor-not-allowed"
+                >
+                  生成推荐问题
+                </button>
+              )}
             </div>
             <div className="space-y-1.5">
               {dynamicQuestions.length === 0 ? (
                 <div className="p-3 rounded-xl bg-white border border-dashed border-slate-300 text-xs text-slate-500 leading-relaxed">
-                  请先完成上方 JD 结构化解析。解析成功后，这里只会根据当前 JD 的职责和能力标签生成推荐问题。
+                  {isGeneratingQuestions ? '正在生成当前 JD 的推荐问题，可随时中断。' : '请先完成 JD 解析，然后点击“生成推荐问题”。系统不会自动触发 Step 2。'}
                 </div>
               ) : dynamicQuestions.map((sq, idx) => (
                 <button
@@ -681,6 +752,16 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                 </>
               )}
             </button>
+            {isGenerating && (
+              <button
+                type="button"
+                onClick={onCancelGenerateAnswer}
+                className="w-full mt-2 py-2.5 rounded-2xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 font-bold text-xs transition-all flex items-center justify-center space-x-2"
+              >
+                <AlertCircle className="w-4 h-4" />
+                <span>中断此次回答生成</span>
+              </button>
+            )}
           </div>
 
           {/* Safety & Grounding Summary Reminder */}
