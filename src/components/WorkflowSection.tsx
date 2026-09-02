@@ -146,8 +146,11 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
     setAiRecommendedQuestions([]);
   };
 
-  // Recommended questions dynamically derived from current mode and active JDContext
-  const dynamicQuestions = hasParsedCurrentJD && hasGeneratedQuestions && jdContext ? (aiRecommendedQuestions.length > 0 ? aiRecommendedQuestions : fallbackQuestions) : [];
+  // Recommended questions are visible by default from local JD-linked rules.
+  // The button upgrades them with model-generated wording only when clicked.
+  const dynamicQuestions = hasParsedCurrentJD && jdContext
+    ? (hasGeneratedQuestions && aiRecommendedQuestions.length > 0 ? aiRecommendedQuestions : fallbackQuestions)
+    : [];
 
   const handleTriggerParse = async () => {
     parseAbortRef.current?.abort();

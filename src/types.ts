@@ -172,7 +172,35 @@ export interface RAGPipelineTrace {
     citationsMapped: number;
     hallucinationCheckScore: number;
     temperature: number;
+    fallbackReason?: string;
+    failureType?: string;
+    rootCause?: string;
+    failureEventId?: string | null;
   };
+}
+
+export interface ModelFailureEvent {
+  id: string;
+  endpoint: string;
+  phase: string;
+  failureType: string;
+  rootCause: string;
+  fallbackUsed: boolean;
+  taskMode?: string | null;
+  question?: string;
+  jdCompany?: string;
+  jdRole?: string;
+  modelProvider?: string | null;
+  modelName?: string | null;
+  errorName?: string;
+  errorMessage?: string;
+  elapsedMs?: number;
+  fewShotCount?: number;
+  evidenceCount?: number;
+  boundaryCount?: number;
+  chunkCount?: number;
+  createdAt: string;
+  details?: Record<string, any>;
 }
 
 export interface EvaluationCheck {

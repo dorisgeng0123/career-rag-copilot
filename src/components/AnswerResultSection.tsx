@@ -13,16 +13,21 @@ import { GroundedAnswer } from '../types';
 interface AnswerResultSectionProps {
   answer: GroundedAnswer;
   onOpenPipeline: () => void;
+  onOpenFailureLog: () => void;
 }
 
 export const AnswerResultSection: React.FC<AnswerResultSectionProps> = ({
   answer,
-  onOpenPipeline
+  onOpenPipeline,
+  onOpenFailureLog
 }) => {
   const [copied, setCopied] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const contextBuckets = answer.contextBuckets;
-  const fallbackReason = (answer.pipelineTrace.generation as any).fallbackReason;
+  const generationDiagnostics = answer.pipelineTrace.generation as any;
+  const fallbackReason = generationDiagnostics.fallbackReason;
+  const rootCause = generationDiagnostics.rootCause;
+  const failureType = generationDiagnostics.failureType;
   const isModelFallback = Boolean(fallbackReason)
     || /fallback|local/i.test(answer.pipelineTrace.generation.model || '')
     || /模型直答不可用|Direct 模型调用失败|direct.*failed/i.test([
@@ -139,11 +144,29 @@ export const AnswerResultSection: React.FC<AnswerResultSectionProps> = ({
             <p className="text-amber-900 leading-relaxed">
               本次没有拿到线上模型生成结果，系统改用本地规则和已召回素材生成口语化草稿。常见原因是 Render 环境变量未配置、API Key 无效、模型额度或资源包不可用，或部署环境无法连接模型接口。
             </p>
+            {rootCause && (
+              <p className="text-amber-950 leading-relaxed">
+                <span className="font-bold">自动根因分析：</span>
+                {String(rootCause)}
+              </p>
+            )}
+            {failureType && (
+              <p className="text-[11px] text-amber-800 font-mono break-words">
+                failure type: {String(failureType)}
+              </p>
+            )}
             {fallbackReason && (
               <p className="text-[11px] text-amber-800 font-mono break-words">
                 fallback reason: {String(fallbackReason)}
               </p>
             )}
+            <button
+              type="button"
+              onClick={onOpenFailureLog}
+              className="mt-1 px-3 py-1.5 rounded-xl bg-white/80 hover:bg-white text-amber-900 border border-amber-300 text-[11px] font-bold"
+            >
+              查看失败记录
+            </button>
           </div>
         </div>
       )}

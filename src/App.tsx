@@ -8,11 +8,13 @@ import { AnswerResultSection } from './components/AnswerResultSection';
 import { RagPipelineModal } from './components/RagPipelineModal';
 import { OntologyModal } from './components/OntologyModal';
 import { TechArchitectureModal } from './components/TechArchitectureModal';
+import { ModelFailureLogModal } from './components/ModelFailureLogModal';
 import { 
   AssetCategory, 
   AssetDocument, 
   GroundedAnswer, 
   JDContext, 
+  ModelFailureEvent,
   TaskMode 
 } from './types';
 import { 
@@ -132,6 +134,9 @@ export default function App() {
   const [isPipelineModalOpen, setIsPipelineModalOpen] = useState<boolean>(false);
   const [isOntologyModalOpen, setIsOntologyModalOpen] = useState<boolean>(false);
   const [isTechArchModalOpen, setIsTechArchModalOpen] = useState<boolean>(false);
+  const [isFailureLogOpen, setIsFailureLogOpen] = useState<boolean>(false);
+  const [modelFailures, setModelFailures] = useState<ModelFailureEvent[]>([]);
+  const [isLoadingFailures, setIsLoadingFailures] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,6 +169,7 @@ export default function App() {
     const controller = new AbortController();
     answerAbortRef.current = controller;
     setIsGeneratingMode('direct');
+    const requestStartedAt = Date.now();
     try {
       const res = await fetch('/api/rag-answer', {
         method: 'POST',
@@ -198,8 +204,30 @@ export default function App() {
         return;
       }
       console.log('Using local dynamic RAG engine:', err);
+      try {
+        await fetch('/api/model-failures', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: '/api/rag-answer',
+            phase: 'client_direct_answer_request',
+            taskMode: mode,
+            question: currentQuestion,
+            jdContext: currentJd,
+            errorMessage: (err as Error).message || 'Client request failed before receiving a model answer',
+            fallbackUsed: true,
+            elapsedMs: Date.now() - requestStartedAt,
+            chunkCount: currentDocs.reduce((sum, doc) => sum + (doc.chunks?.length || 0), 0),
+          }),
+        });
+      } catch (logErr) {
+        console.warn('Failed to save client-side model failure event', logErr);
+      }
       // Fallback local engine that uses active JD, question and documents
       const fallback = simulateRAGGeneration(mode, currentJd, currentQuestion, currentDocs);
+      (fallback.pipelineTrace.generation as any).fallbackReason = (err as Error).message || 'Client request failed before receiving a model answer';
+      (fallback.pipelineTrace.generation as any).failureType = 'client_request_failed';
+      (fallback.pipelineTrace.generation as any).rootCause = '前端没有拿到后端返回的合格模型答案，系统临时展示本地兜底草稿。';
       setDirectAnswer({ ...fallback, answerMode: 'direct' });
     } finally {
       if (answerAbortRef.current === controller) {
@@ -312,6 +340,26 @@ export default function App() {
     setIsGeneratingMode(null);
   };
 
+  const loadModelFailures = async () => {
+    setIsLoadingFailures(true);
+    try {
+      const res = await fetch('/api/model-failures?limit=30');
+      if (!res.ok) throw new Error(`failed to load model failures: ${res.status}`);
+      const data = await res.json();
+      setModelFailures(Array.isArray(data.failures) ? data.failures : []);
+    } catch (err) {
+      console.warn('Failed to load model failure events', err);
+      setModelFailures([]);
+    } finally {
+      setIsLoadingFailures(false);
+    }
+  };
+
+  const handleOpenFailureLog = () => {
+    setIsFailureLogOpen(true);
+    loadModelFailures();
+  };
+
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 flex flex-col font-sans antialiased selection:bg-indigo-100 selection:text-indigo-900">
       
@@ -362,6 +410,7 @@ export default function App() {
             <AnswerResultSection
               answer={directAnswer}
               onOpenPipeline={() => setIsPipelineModalOpen(true)}
+              onOpenFailureLog={handleOpenFailureLog}
             />
           </section>
         )}
@@ -411,6 +460,14 @@ export default function App() {
       <TechArchitectureModal
         isOpen={isTechArchModalOpen}
         onClose={() => setIsTechArchModalOpen(false)}
+      />
+
+      <ModelFailureLogModal
+        isOpen={isFailureLogOpen}
+        failures={modelFailures}
+        isLoading={isLoadingFailures}
+        onClose={() => setIsFailureLogOpen(false)}
+        onRefresh={loadModelFailures}
       />
 
     </div>

@@ -107,6 +107,30 @@ async function getDb(): Promise<Database> {
           answer_json TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS model_failure_events (
+          id TEXT PRIMARY KEY,
+          endpoint TEXT NOT NULL,
+          phase TEXT NOT NULL,
+          failure_type TEXT NOT NULL,
+          root_cause TEXT NOT NULL,
+          fallback_used INTEGER NOT NULL,
+          task_mode TEXT,
+          question TEXT,
+          jd_company TEXT,
+          jd_role TEXT,
+          model_provider TEXT,
+          model_name TEXT,
+          error_name TEXT,
+          error_message TEXT,
+          elapsed_ms INTEGER,
+          few_shot_count INTEGER,
+          evidence_count INTEGER,
+          boundary_count INTEGER,
+          chunk_count INTEGER,
+          json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_model_failure_events_created_at ON model_failure_events(created_at);
       `);
       persistDb(db);
       return db;
@@ -261,6 +285,144 @@ async function saveRagRun(answer: any, taskMode: string, question: string, jdCon
   persistDb(db);
 }
 
+function truncateForDiagnostics(value: any, maxLength = 420) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function classifyModelFailure(error: any) {
+  const errorName = String(error?.name || "");
+  const errorMessage = String(error?.message || error?.cause?.code || error || "");
+  const combined = `${errorName} ${errorMessage}`.toLowerCase();
+
+  if (/abort|timeout|timed? out|etimedout|deadline/.test(combined)) {
+    return {
+      failureType: "timeout",
+      rootCause: "模型接口响应超时，常见原因是上下文过长、模型服务慢、Render 冷启动或网络抖动。",
+    };
+  }
+  if (/not configured|missing.*key|api[_ -]?key|unauthorized|401|403/.test(combined)) {
+    return {
+      failureType: "config_missing",
+      rootCause: "模型环境配置不可用，通常是 API Key、模型名、Base URL 或服务额度配置异常。",
+    };
+  }
+  if (/valid json|json|parse|schema|format/.test(combined)) {
+    return {
+      failureType: "invalid_json",
+      rootCause: "模型有返回内容，但格式不符合后端要求的 JSON 结构，所以触发了本地兜底。",
+    };
+  }
+  if (/empty|no content|returned.*nothing/.test(combined)) {
+    return {
+      failureType: "empty_response",
+      rootCause: "模型返回为空或缺少回答正文，系统没有拿到可展示的合格答案。",
+    };
+  }
+  if (/network|fetch|enotfound|econn|socket|dns|502|503|504|429|rate|quota/.test(combined)) {
+    return {
+      failureType: "api_error",
+      rootCause: "模型服务或网络链路异常，可能是接口限流、额度、网关错误或临时连接失败。",
+    };
+  }
+  if (/citation|grounding|ref/.test(combined)) {
+    return {
+      failureType: "grounding_check_failed",
+      rootCause: "模型回答没有通过引用或事实边界校验，系统改用本地素材组织兜底答案。",
+    };
+  }
+
+  return {
+    failureType: "unknown",
+    rootCause: "模型调用失败原因不明确，需要结合当时问题、上下文规模和服务状态继续排查。",
+  };
+}
+
+async function saveModelFailureEvent(input: {
+  endpoint: string;
+  phase: string;
+  taskMode?: string;
+  question?: string;
+  jdContext?: any;
+  modelProvider?: string | null;
+  modelName?: string | null;
+  error?: any;
+  failureType?: string;
+  rootCause?: string;
+  fallbackUsed?: boolean;
+  elapsedMs?: number;
+  fewShotCount?: number;
+  evidenceCount?: number;
+  boundaryCount?: number;
+  chunkCount?: number;
+  details?: Record<string, any>;
+}) {
+  const db = await getDb();
+  const classified = input.failureType && input.rootCause
+    ? { failureType: input.failureType, rootCause: input.rootCause }
+    : classifyModelFailure(input.error);
+  const modelConfig = getModelConfig();
+  const createdAt = new Date().toISOString();
+  const event = {
+    id: `model-failure-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    endpoint: input.endpoint,
+    phase: input.phase,
+    failureType: classified.failureType,
+    rootCause: classified.rootCause,
+    fallbackUsed: input.fallbackUsed !== false,
+    taskMode: input.taskMode || null,
+    question: truncateForDiagnostics(input.question, 360),
+    jdCompany: truncateForDiagnostics(input.jdContext?.companyName, 120),
+    jdRole: truncateForDiagnostics(input.jdContext?.roleTitle, 120),
+    modelProvider: input.modelProvider || modelConfig?.provider || process.env.MODEL_PROVIDER || "openai",
+    modelName: input.modelName || modelConfig?.model || process.env.ZHIPU_MODEL || process.env.OPENAI_MODEL || null,
+    errorName: truncateForDiagnostics(input.error?.name || classified.failureType, 80),
+    errorMessage: truncateForDiagnostics(input.error?.message || input.error, 520),
+    elapsedMs: Math.max(0, Math.round(input.elapsedMs || 0)),
+    fewShotCount: input.fewShotCount || 0,
+    evidenceCount: input.evidenceCount || 0,
+    boundaryCount: input.boundaryCount || 0,
+    chunkCount: input.chunkCount || 0,
+    details: input.details || {},
+    createdAt,
+  };
+
+  db.run(
+    `INSERT INTO model_failure_events (
+      id, endpoint, phase, failure_type, root_cause, fallback_used, task_mode, question,
+      jd_company, jd_role, model_provider, model_name, error_name, error_message, elapsed_ms,
+      few_shot_count, evidence_count, boundary_count, chunk_count, json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      event.id,
+      event.endpoint,
+      event.phase,
+      event.failureType,
+      event.rootCause,
+      event.fallbackUsed ? 1 : 0,
+      event.taskMode,
+      event.question,
+      event.jdCompany,
+      event.jdRole,
+      event.modelProvider,
+      event.modelName,
+      event.errorName,
+      event.errorMessage,
+      event.elapsedMs,
+      event.fewShotCount,
+      event.evidenceCount,
+      event.boundaryCount,
+      event.chunkCount,
+      JSON.stringify(event),
+      createdAt,
+    ]
+  );
+  persistDb(db);
+  return event;
+}
+
 function getModelConfig() {
   const provider = String(process.env.MODEL_PROVIDER || "openai").toLowerCase() === "zhipu"
     ? "zhipu"
@@ -383,26 +545,39 @@ async function callOpenAIJson(contents: any, options: { temperature?: number; fo
     }
   }
 
-  const response = await fetchOpenAI(`${config.baseURL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.MODEL_REQUEST_TIMEOUT_MS || 45000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchOpenAI(`${config.baseURL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`${config.provider} API failed (${response.status}): ${errorText.slice(0, 500)}`);
-  }
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`${config.provider} API failed (${response.status}): ${errorText.slice(0, 500)}`);
+    }
 
-  const payload = await response.json();
-  const content = payload?.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error(`${config.provider} API returned an empty JSON response`);
+    const payload = await response.json();
+    const content = payload?.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error(`${config.provider} API returned an empty JSON response`);
+    }
+    return { text: content };
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      throw new Error(`${config.provider} API timeout after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return { text: content };
 }
 
 function parseModelJson(text: string) {
@@ -647,7 +822,46 @@ app.get("/api/assets", async (_req, res) => {
   }
 });
 
+app.get("/api/model-failures", async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 30)));
+    const db = await getDb();
+    const failures = dbSelectJson<any>(
+      db,
+      "SELECT json FROM model_failure_events ORDER BY created_at DESC LIMIT ?",
+      [limit]
+    );
+    res.json({ failures, count: failures.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to load model failure events" });
+  }
+});
+
+app.post("/api/model-failures", async (req, res) => {
+  try {
+    const event = await saveModelFailureEvent({
+      endpoint: req.body?.endpoint || "/client",
+      phase: req.body?.phase || "client_request",
+      taskMode: req.body?.taskMode,
+      question: req.body?.question,
+      jdContext: req.body?.jdContext,
+      error: new Error(req.body?.errorMessage || "Client observed model fallback"),
+      fallbackUsed: req.body?.fallbackUsed !== false,
+      elapsedMs: Number(req.body?.elapsedMs || 0),
+      fewShotCount: Number(req.body?.fewShotCount || 0),
+      evidenceCount: Number(req.body?.evidenceCount || 0),
+      boundaryCount: Number(req.body?.boundaryCount || 0),
+      chunkCount: Number(req.body?.chunkCount || 0),
+      details: req.body?.details || {},
+    });
+    res.json({ event });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to save model failure event" });
+  }
+});
+
 app.post("/api/recommend-questions", async (req, res) => {
+  const startTime = Date.now();
   try {
     const { taskMode, jdContext } = req.body;
     if (!taskMode || !jdContext) {
@@ -664,6 +878,16 @@ app.post("/api/recommend-questions", async (req, res) => {
     }
     const openai = getOpenAIConfig();
     if (!openai) {
+      await saveModelFailureEvent({
+        endpoint: "/api/recommend-questions",
+        phase: "question_recommendation",
+        taskMode,
+        jdContext,
+        error: new Error(`${process.env.MODEL_PROVIDER === "zhipu" ? "ZHIPU_API_KEY" : "OPENAI_API_KEY"} is not configured`),
+        fallbackUsed: true,
+        elapsedMs: Date.now() - startTime,
+        details: { localQuestionCount: fallbackQuestions.length },
+      });
       return res.json({
         questions: fallbackQuestions,
         source: "local-fallback",
@@ -698,6 +922,16 @@ ${JSON.stringify(jdContext, null, 2)}`;
       });
     } catch (openaiQuestionErr) {
       console.warn("Model question recommendation failed, using local JD-linked questions:", openaiQuestionErr);
+      await saveModelFailureEvent({
+        endpoint: "/api/recommend-questions",
+        phase: "question_recommendation",
+        taskMode,
+        jdContext,
+        error: openaiQuestionErr,
+        fallbackUsed: true,
+        elapsedMs: Date.now() - startTime,
+        details: { localQuestionCount: fallbackQuestions.length },
+      });
       return res.json({
         questions: fallbackQuestions,
         source: "local-fallback",
@@ -1805,6 +2039,21 @@ app.post("/api/parse-jd", async (req, res) => {
         ? parsedResult.requiredCapabilities.filter((cap: any) => String(cap || "").trim().length >= 2)
         : [];
       if (image && (!parsedResult.companyName || !parsedResult.roleTitle || parsedRequirements.length === 0)) {
+        await saveModelFailureEvent({
+          endpoint: "/api/parse-jd",
+          phase: "jd_image_structure",
+          failureType: "low_confidence",
+          rootCause: "JD 截图 OCR 或结构化结果置信度不足，系统没有生成可能误导的结构化 JD。",
+          error: new Error("JD image parse low confidence"),
+          fallbackUsed: false,
+          elapsedMs: Date.now() - startTime,
+          details: {
+            fileName: truncateForDiagnostics(fileName, 180),
+            hasCompanyName: Boolean(parsedResult.companyName),
+            hasRoleTitle: Boolean(parsedResult.roleTitle),
+            requirementsCount: parsedRequirements.length,
+          },
+        });
         return res.status(422).json({
           error: "截图 OCR 没有可靠识别出公司、岗位和核心职责，已按保守策略停止解析。",
           code: "JD_IMAGE_PARSE_LOW_CONFIDENCE",
@@ -1834,6 +2083,18 @@ app.post("/api/parse-jd", async (req, res) => {
       } catch (openaiParseErr) {
         if (image) {
           console.warn("Model JD image parsing failed; no fallback JD will be generated:", openaiParseErr);
+          await saveModelFailureEvent({
+            endpoint: "/api/parse-jd",
+            phase: ocrText ? "jd_image_structure" : "jd_image_ocr",
+            error: openaiParseErr,
+            fallbackUsed: false,
+            elapsedMs: Date.now() - startTime,
+            details: {
+              fileName: truncateForDiagnostics(fileName, 180),
+              hasImage: true,
+              ocrTextLength: ocrText.length,
+            },
+          });
           return res.status(502).json({
             error: ocrText
               ? `截图 OCR 已成功，但 JD 结构化解析失败：${(openaiParseErr as any)?.message || "模型没有返回可解析 JSON"}。未生成兜底 JD。`
@@ -1842,10 +2103,32 @@ app.post("/api/parse-jd", async (req, res) => {
           });
         }
         console.warn("Model JD text parsing failed, falling back to local heuristic parser:", openaiParseErr);
+        await saveModelFailureEvent({
+          endpoint: "/api/parse-jd",
+          phase: "jd_text_structure",
+          error: openaiParseErr,
+          fallbackUsed: true,
+          elapsedMs: Date.now() - startTime,
+          details: {
+            fileName: truncateForDiagnostics(fileName, 180),
+            rawTextLength: String(rawText || "").length,
+          },
+        });
       }
     }
 
     if (image) {
+      await saveModelFailureEvent({
+        endpoint: "/api/parse-jd",
+        phase: "jd_image_ocr",
+        error: new Error(`${getModelProviderLabel()} vision OCR is unavailable`),
+        fallbackUsed: false,
+        elapsedMs: Date.now() - startTime,
+        details: {
+          fileName: truncateForDiagnostics(fileName, 180),
+          hasImage: true,
+        },
+      });
       return res.status(503).json({
         error: `截图 JD 需要可用的 ${getModelProviderLabel()} 视觉 OCR。当前没有可用模型配置，已按“不出兜底数据”规则停止解析。`,
         code: "JD_IMAGE_OCR_UNAVAILABLE",
@@ -2787,7 +3070,63 @@ if (answerMode === "direct") {
       } catch (modelAnswerErr: any) {
         console.warn("Model answer generation failed, falling back to local evidence composer:", modelAnswerErr);
         (req as any).modelAnswerFailureReason = modelAnswerErr?.message || "Model answer generation failed";
+        (req as any).modelFailureEvent = await saveModelFailureEvent({
+          endpoint: "/api/rag-answer",
+          phase: answerMode === "direct" ? "direct_answer_generation" : "grounded_answer_generation",
+          taskMode,
+          question,
+          jdContext,
+          error: modelAnswerErr,
+          fallbackUsed: true,
+          elapsedMs: Date.now() - startTime,
+          fewShotCount: fewShotChunks.slice(0, 4).length,
+          evidenceCount: citations.filter((chunk: any) =>
+            chunk.factBoundary !== "expression_example" &&
+            chunk.chunkType !== "qa_fewshot" &&
+            chunk.chunkType !== "risk_boundary"
+          ).slice(0, 5).length,
+          boundaryCount: scoredChunks.filter((chunk: any) =>
+            chunk.category === "boundary" || chunk.chunkType === "risk_boundary"
+          ).slice(0, 4).length,
+          chunkCount: citations.length,
+          details: {
+            answerMode,
+            questionFocus: focusLabel(questionFocus),
+            allChunksCount: allChunks.length,
+            candidateMaterialsCount: scoredChunks.length,
+          },
+        });
       }
+    }
+
+    if (!ai && !(req as any).modelFailureEvent) {
+      (req as any).modelAnswerFailureReason = `${getModelProviderLabel()} model configuration is unavailable`;
+      (req as any).modelFailureEvent = await saveModelFailureEvent({
+        endpoint: "/api/rag-answer",
+        phase: answerMode === "direct" ? "direct_answer_generation" : "grounded_answer_generation",
+        taskMode,
+        question,
+        jdContext,
+        error: new Error((req as any).modelAnswerFailureReason),
+        fallbackUsed: true,
+        elapsedMs: Date.now() - startTime,
+        fewShotCount: fewShotChunks.slice(0, 4).length,
+        evidenceCount: citations.filter((chunk: any) =>
+          chunk.factBoundary !== "expression_example" &&
+          chunk.chunkType !== "qa_fewshot" &&
+          chunk.chunkType !== "risk_boundary"
+        ).slice(0, 5).length,
+        boundaryCount: scoredChunks.filter((chunk: any) =>
+          chunk.category === "boundary" || chunk.chunkType === "risk_boundary"
+        ).slice(0, 4).length,
+        chunkCount: citations.length,
+        details: {
+          answerMode,
+          questionFocus: focusLabel(questionFocus),
+          allChunksCount: allChunks.length,
+          candidateMaterialsCount: scoredChunks.length,
+        },
+      });
     }
 
     const localAnswer = generateDynamicGroundedAnswer(taskMode, jdContext, question, docList);
@@ -2860,6 +3199,9 @@ if (answerMode === "direct") {
       localAnswer.pipelineTrace.contextAssembly.chunkCount = citations.length;
       localAnswer.pipelineTrace.generation.model = `Local evidence-to-answer composer (${getModelProviderLabel()} fallback)`;
       (localAnswer.pipelineTrace.generation as any).fallbackReason = (req as any).modelAnswerFailureReason || "Model generation unavailable";
+      (localAnswer.pipelineTrace.generation as any).failureType = (req as any).modelFailureEvent?.failureType || "unknown";
+      (localAnswer.pipelineTrace.generation as any).rootCause = (req as any).modelFailureEvent?.rootCause || "模型调用没有产出可展示的合格答案，系统改用本地兜底草稿。";
+      (localAnswer.pipelineTrace.generation as any).failureEventId = (req as any).modelFailureEvent?.id || null;
       localAnswer.pipelineTrace.generation.citationsMapped = answerMode === "direct" ? 0 : citations.length;
     } else if (localAnswer.retrievedChunks.length > 0) {
       const evidenceLines = localAnswer.retrievedChunks

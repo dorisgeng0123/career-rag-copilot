@@ -301,6 +301,7 @@ ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ZHIPU_MODEL=glm-4.5-air
 ZHIPU_VISION_MODEL=glm-ocr
 ZHIPU_THINKING_TYPE=enabled
+MODEL_REQUEST_TIMEOUT_MS=45000
 ENABLE_UPLOAD_MODEL_PARSING=false
 ```
 
@@ -556,6 +557,7 @@ ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ZHIPU_MODEL=glm-4.5-air
 ZHIPU_VISION_MODEL=glm-ocr
 ZHIPU_THINKING_TYPE=enabled
+MODEL_REQUEST_TIMEOUT_MS=45000
 ENABLE_UPLOAD_MODEL_PARSING=false
 ```
 
@@ -564,6 +566,23 @@ ENABLE_UPLOAD_MODEL_PARSING=false
 - 服务端已支持 `process.env.PORT`，可以适配 Render 的运行环境。
 - 如果只是给面试官试用，可以先不配置持久磁盘。
 - 如果需要长期保存线上上传资产，需要为 `data/` 配置持久化存储。
+
+## Badcase 自动采集与根因分析
+
+为了避免每次线上回答失败都靠人工复述，项目加入了模型调用失败自动采集能力。只要 JD 解析、推荐问题生成或回答生成发生超时、接口异常、返回空内容、JSON 格式不合规、引用校验失败或进入本地 fallback，后端都会写入一条运行诊断记录。
+
+记录内容包括：
+
+- 失败阶段：JD OCR / JD 结构化 / 推荐问题 / 直接回答生成 / 校验版回答生成
+- 用户问题：只保存问题文本，不保存上传资产全文
+- 当前 JD 摘要：公司、岗位和结构化上下文标识
+- 模型信息：provider、model name、耗时
+- 上下文规模：few-shot / evidence / boundary / chunk 数量
+- 自动根因：timeout、config_missing、invalid_json、empty_response、api_error、grounding_check_failed、low_confidence、unknown
+
+前端在出现 fallback 时会展示更醒目的提醒，并提供“查看失败记录”入口。面试官可以看到这次 badcase 是模型接口超时、配置异常、格式不合规，还是事实边界校验未通过。
+
+这部分是运行诊断数据，不提交到 GitHub。GitHub 仓库只保存采集机制、接口和页面能力；真实 badcase 日志保存在部署环境的 SQLite 数据库中。如果 Render 没有配置持久磁盘，服务重启或重新部署后日志可能清空；如果需要长期留存，可以为 `data/` 配置 Render Disk 或迁移到外部数据库。
 
 ## 隐私说明
 
