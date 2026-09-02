@@ -29,7 +29,7 @@ function createNoJDAnswer(taskMode: TaskMode, question: string): GroundedAnswer 
     taskMode,
     question,
     strategy: '缺少 JD 上下文，已阻止使用样例 JD 生成回答。',
-    recommendedAnswer: `我已经收到你的问题：「${question}」。但当前还没有完成 JD 结构化解析，所以不能把它当作“根据这份 JD”的问题来回答，也不会再用 DataBridge 或其他 demo JD 兜底。\n\n请先在步骤 1 上传截图或粘贴 JD 文本，并点击解析。解析成功后，步骤 2 推荐问题和步骤 3 面试回答都会绑定这一次解析出的 JDContext。`,
+    recommendedAnswer: `我已经收到你的问题：「${question}」。但当前还没有完成 JD 结构化解析，所以不能把它当作“根据这份 JD”的问题来回答，也不会再用 DataBridge 或其他 demo JD 兜底。\n\n请先在步骤 1 上传截图或粘贴 JD 文本，等待后台解析完成。解析成功后，步骤 2 推荐问题和步骤 3 面试回答都会绑定这一次解析出的 JDContext。`,
     evidenceSummary: [],
     riskNotices: ['当前缺少 JDContext，不能生成岗位定制回答。', '系统已阻止 demo JD 兜底，避免误导。'],
     boundaries: {
@@ -45,7 +45,7 @@ function createNoJDAnswer(taskMode: TaskMode, question: string): GroundedAnswer 
         maxScore: 100,
         status: 'warning',
         summary: '缺少 JDContext，未执行岗位意图匹配。',
-        checks: [{ id: 'im-no-jd', label: 'JDContext', passed: false, score: 0, detail: '请先解析 JD' }]
+        checks: [{ id: 'im-no-jd', label: 'JDContext', passed: false, score: 0, detail: '等待后台解析 JD' }]
       },
       ragGrounding: {
         score: 0,

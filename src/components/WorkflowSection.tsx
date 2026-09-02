@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   FileSearch, 
   Upload, 
@@ -69,6 +69,8 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
   const [isGeneratingQuestions, setIsGeneratingQuestions] = useState<boolean>(false);
   const parseAbortRef = useRef<AbortController | null>(null);
   const recommendAbortRef = useRef<AbortController | null>(null);
+  const lastAutoParseKeyRef = useRef<string>('');
+  const currentInputKeyRef = useRef<string>('');
 
   const handleSelectPreset = (key: string) => {
     setSelectedPresetKey(key);
@@ -103,8 +105,18 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
     return getRecommendedQuestions(currentMode, jdContext);
   }, [currentMode, jdContext?.id, jdContext?.companyName, jdContext?.roleTitle, jdContext?.parsedAt]);
 
+  const autoParseInputKey = useMemo(() => {
+    if (jdInputMode === 'text') {
+      return `text:${pastedJdText.trim()}`;
+    }
+    if (uploadedScreenshotPreview) {
+      return `image:${uploadedScreenshotName}:${uploadedMimeType}:${uploadedScreenshotPreview.length}:${uploadedScreenshotPreview.slice(0, 64)}`;
+    }
+    return `preset:${selectedPresetKey}:${uploadedScreenshotName}`;
+  }, [jdInputMode, pastedJdText, selectedPresetKey, uploadedScreenshotName, uploadedMimeType, uploadedScreenshotPreview]);
+
   const handleGenerateQuestions = async () => {
-    if (!jdContext || isGeneratingQuestions) return;
+    if (!jdContext || !hasParsedCurrentJD || isGeneratingQuestions) return;
 
     recommendAbortRef.current?.abort();
     const controller = new AbortController();
@@ -153,6 +165,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
     : [];
 
   const handleTriggerParse = async () => {
+    const parseInputKey = autoParseInputKey;
     parseAbortRef.current?.abort();
     const controller = new AbortController();
     parseAbortRef.current = controller;
@@ -217,6 +230,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
 
       const data: JDContext & { source?: string } = await res.json();
       if (data && data.companyName && data.coreRequirements && data.coreRequirements.length > 0) {
+        if (currentInputKeyRef.current !== parseInputKey) return;
         const unifiedJD: JDContext = {
           ...data,
           id: `jd-parsed-${Date.now()}`,
@@ -251,6 +265,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
         jdInputMode === 'screenshot' && !uploadedScreenshotPreview ? selectedPresetKey : undefined
       );
 
+      if (currentInputKeyRef.current !== parseInputKey) return;
       onParseJD(parsedJD);
       setHasParsedCurrentJD(true);
       setParseEngineNote(`本地智能解析已抽取【${parsedJD.companyName}】岗位上下文`);
@@ -267,6 +282,42 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
     parseAbortRef.current = null;
     setIsParsingJD(false);
     setParseError('已中断本次 JD 解析。');
+  };
+
+  useEffect(() => {
+    currentInputKeyRef.current = autoParseInputKey;
+    if (jdInputMode === 'text' && !pastedJdText.trim()) {
+      parseAbortRef.current?.abort();
+      setIsParsingJD(false);
+      setHasParsedCurrentJD(false);
+      setParseError(null);
+      setParseEngineNote(null);
+      lastAutoParseKeyRef.current = '';
+      return;
+    }
+
+    const delayMs = jdInputMode === 'text' ? 900 : 250;
+    const timer = window.setTimeout(() => {
+      if (lastAutoParseKeyRef.current === autoParseInputKey) return;
+      lastAutoParseKeyRef.current = autoParseInputKey;
+      handleTriggerParse();
+    }, delayMs);
+
+    return () => window.clearTimeout(timer);
+  }, [autoParseInputKey]);
+
+  const activeJDContext = hasParsedCurrentJD ? jdContext : null;
+  const canGenerateAnswer = Boolean(question.trim() && activeJDContext && !isParsingJD && !isGenerating);
+  const handleGenerateClick = () => {
+    if (isParsingJD) {
+      setParseError('JD 正在后台解析，请等待解析完成后再生成回答。');
+      return;
+    }
+    if (!activeJDContext) {
+      setParseError('请先上传或粘贴 JD，等待后台解析完成后再生成回答。');
+      return;
+    }
+    onGenerateAnswer();
   };
 
   return (
@@ -501,51 +552,55 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
             </div>
           )}
 
-          {/* Parse Trigger Button */}
-          <div>
-            <button
-              type="button"
-              id="btn-parse-jd-screenshot"
-              onClick={handleTriggerParse}
-              disabled={isParsingJD}
-              className={`w-full py-3 rounded-2xl font-bold text-xs transition-all flex items-center justify-center space-x-2 shadow-sm ${
-                hasParsedCurrentJD
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                  : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-              }`}
-            >
-              {isParsingJD ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>正在执行真实 AI 解析并构建 JD 上下文...</span>
-                </>
-              ) : hasParsedCurrentJD ? (
-                <>
-                  <CheckCircle2 className="w-4 h-4 text-emerald-100" />
-                  <span>{parseEngineNote || 'JD 已成功解析！点击可重新解析'}</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4" />
-                  <span>点击【{jdInputMode === 'screenshot' ? '解析截图' : '解析 JD 文本'}】抽取结构化上下文</span>
-                </>
+          {/* Background JD Parse Progress */}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center space-x-2">
+                <div className={`p-1.5 rounded-xl border ${
+                  isParsingJD
+                    ? 'bg-indigo-50 text-indigo-600 border-indigo-100'
+                    : hasParsedCurrentJD
+                      ? 'bg-emerald-50 text-emerald-600 border-emerald-100'
+                      : 'bg-slate-100 text-slate-500 border-slate-200'
+                }`}>
+                  {isParsingJD ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : hasParsedCurrentJD ? (
+                    <CheckCircle2 className="w-4 h-4" />
+                  ) : (
+                    <Sparkles className="w-4 h-4" />
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-900">
+                    {isParsingJD ? '正在后台解析 JD' : hasParsedCurrentJD ? 'JD 已完成后台解析' : '等待 JD 输入'}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {isParsingJD
+                      ? '系统正在抽取公司、岗位、职责权重和能力标签。'
+                      : hasParsedCurrentJD
+                        ? (parseEngineNote || '已生成结构化岗位上下文，可继续输入问题并生成回答。')
+                        : '上传截图或粘贴 JD 后，系统会自动开始解析。'}
+                  </p>
+                </div>
+              </div>
+              {isParsingJD && (
+                <button
+                  type="button"
+                  onClick={handleCancelParse}
+                  className="shrink-0 px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-[11px] font-bold"
+                >
+                  中断解析
+                </button>
               )}
-            </button>
-            {isParsingJD && (
-              <button
-                type="button"
-                onClick={handleCancelParse}
-                className="w-full mt-2 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center justify-center space-x-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200"
-              >
-                <AlertCircle className="w-4 h-4" />
-                <span>中断此次 JD 解析</span>
-              </button>
-            )}
-            {!hasParsedCurrentJD && (
-              <p className="text-[11px] text-amber-700 font-medium text-center mt-1.5 flex items-center justify-center space-x-1">
-                <span>⚠️ 规范约束：上传或更改后请点击上方按钮完成结构化解析</span>
-              </p>
-            )}
+            </div>
+            <div className="h-1.5 rounded-full bg-white border border-slate-200 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  isParsingJD ? 'w-2/3 bg-indigo-600 animate-pulse' : hasParsedCurrentJD ? 'w-full bg-emerald-500' : 'w-1/6 bg-slate-300'
+                }`}
+              />
+            </div>
           </div>
 
           {/* Direct Pipeline Linkage Indicator */}
@@ -574,39 +629,39 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                 </div>
               </div>
 
-              {jdContext ? (
+              {activeJDContext ? (
                 <div className="flex items-center space-x-1.5">
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-mono">
-                    已解析：{jdContext.companyName}
+                    已解析：{activeJDContext.companyName}
                   </span>
                 </div>
               ) : (
                 <span className="text-[10px] text-amber-700 font-mono font-semibold">
-                  [等待点击上方解析按钮]
+                  [{isParsingJD ? '后台解析中' : '等待 JD 输入'}]
                 </span>
               )}
             </div>
 
             {/* Context Content Body */}
-            {jdContext ? (
+            {activeJDContext ? (
               <div className="space-y-3 text-xs">
                 {/* Meta 4-Bento Grid Row */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <div className="p-2 rounded-xl bg-white border border-slate-200/80 shadow-xs">
                     <span className="text-[10px] text-slate-500 block font-medium">公司名称</span>
-                    <span className="font-bold text-slate-900 truncate block mt-0.5">{jdContext.companyName}</span>
+                    <span className="font-bold text-slate-900 truncate block mt-0.5">{activeJDContext.companyName}</span>
                   </div>
                   <div className="p-2 rounded-xl bg-white border border-slate-200/80 shadow-xs">
                     <span className="text-[10px] text-slate-500 block font-medium">岗位定位</span>
-                    <span className="font-bold text-indigo-600 truncate block mt-0.5">{jdContext.roleTitle}</span>
+                    <span className="font-bold text-indigo-600 truncate block mt-0.5">{activeJDContext.roleTitle}</span>
                   </div>
                   <div className="p-2 rounded-xl bg-white border border-slate-200/80 shadow-xs">
                     <span className="text-[10px] text-slate-500 block font-medium">职级年限</span>
-                    <span className="font-bold text-slate-900 truncate block mt-0.5">{jdContext.level}</span>
+                    <span className="font-bold text-slate-900 truncate block mt-0.5">{activeJDContext.level}</span>
                   </div>
                   <div className="p-2 rounded-xl bg-white border border-slate-200/80 shadow-xs">
                     <span className="text-[10px] text-slate-500 block font-medium">匹配度评分</span>
-                    <span className="font-bold text-emerald-600 truncate block mt-0.5">{jdContext.matchScore || 92}%</span>
+                    <span className="font-bold text-emerald-600 truncate block mt-0.5">{activeJDContext.matchScore || 92}%</span>
                   </div>
                 </div>
 
@@ -616,7 +671,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                     抽取的关键职责与技能要求 (JobRequirements)：
                   </span>
                   <div className="space-y-1.5">
-                    {jdContext.coreRequirements.map((req) => (
+                    {activeJDContext.coreRequirements.map((req) => (
                       <div
                         key={req.id}
                         className="p-2 rounded-xl bg-white border border-slate-200/80 flex items-start space-x-2 text-[11px] shadow-xs"
@@ -634,7 +689,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                 {/* Ontology Capability Tags */}
                 <div className="flex flex-wrap gap-1.5 pt-0.5">
                   <span className="text-[11px] text-slate-600 font-semibold self-center mr-1">能力要求标签:</span>
-                  {jdContext.requiredCapabilities.map((cap, idx) => (
+                  {activeJDContext.requiredCapabilities.map((cap, idx) => (
                     <span
                       key={idx}
                       className="text-[10px] font-medium px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200"
@@ -649,7 +704,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                 <FileSearch className="w-7 h-7 mx-auto text-slate-400" />
                 <p className="text-xs font-semibold text-slate-700">暂无解析结果</p>
                 <p className="text-[11px] text-slate-500">
-                  请先在上方选择或上传截图/文本，并点击<strong>【解析截图】</strong>。
+                  请先在上方选择或上传截图/文本，系统会自动完成后台解析。
                 </p>
               </div>
             )}
@@ -672,7 +727,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
               <label className="text-xs font-bold text-slate-800 flex items-center space-x-1.5">
                 <span>💡 模式与 JD 联动推荐问题</span>
                 <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                  针对【{jdContext?.companyName || '目标岗位'}】定制
+                  针对【{activeJDContext?.companyName || '目标岗位'}】定制
                 </span>
               </label>
               {isGeneratingQuestions ? (
@@ -687,7 +742,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
                 <button
                   type="button"
                   onClick={handleGenerateQuestions}
-                  disabled={!hasParsedCurrentJD || !jdContext}
+                  disabled={!activeJDContext || isParsingJD}
                   className="text-[10px] text-indigo-600 hover:underline font-bold disabled:text-slate-400 disabled:no-underline disabled:cursor-not-allowed"
                 >
                   生成推荐问题
@@ -697,7 +752,11 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
             <div className="space-y-1.5">
               {dynamicQuestions.length === 0 ? (
                 <div className="p-3 rounded-xl bg-white border border-dashed border-slate-300 text-xs text-slate-500 leading-relaxed">
-                  {isGeneratingQuestions ? '正在生成当前 JD 的推荐问题，可随时中断。' : '请先完成 JD 解析，然后点击“生成推荐问题”。系统不会自动触发 Step 2。'}
+                  {isParsingJD
+                    ? 'JD 正在后台解析，完成后会先展示一组默认推荐问题。'
+                    : isGeneratingQuestions
+                      ? '正在生成当前 JD 的推荐问题，可随时中断。'
+                      : '请先上传或粘贴 JD，系统解析完成后会展示默认推荐问题。'}
                 </div>
               ) : dynamicQuestions.map((sq, idx) => (
                 <button
@@ -739,8 +798,8 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
             <button
               type="button"
               id="btn-generate-direct-answer"
-              onClick={onGenerateAnswer}
-              disabled={isGenerating || !question.trim()}
+              onClick={handleGenerateClick}
+              disabled={!canGenerateAnswer}
               className="w-full py-3 rounded-2xl bg-white hover:bg-amber-50 text-amber-800 border border-amber-200 font-bold text-xs shadow-xs transition-all flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {generatingMode === 'direct' ? (
@@ -751,7 +810,7 @@ export const WorkflowSection: React.FC<WorkflowSectionProps> = ({
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  <span>直接模型回答</span>
+                  <span>{isParsingJD ? '等待 JD 后台解析完成' : '直接模型回答'}</span>
                 </>
               )}
             </button>
