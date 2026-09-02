@@ -50,7 +50,7 @@ const CATEGORY_TABS: { id: AssetCategory | 'all'; name: string; icon: React.Reac
   { id: 'all', name: '全部资产', icon: <Globe className="w-3.5 h-3.5" />, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
   { id: 'profile', name: '简历画像', icon: <User className="w-3.5 h-3.5" />, color: 'text-blue-600 bg-blue-50 border-blue-200' },
   { id: 'evidence', name: '项目证据', icon: <Briefcase className="w-3.5 h-3.5" />, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-  { id: 'retro', name: '面试复盘', icon: <RotateCcw className="w-3.5 h-3.5" />, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+  { id: 'retro', name: '面试复盘Q&A', icon: <RotateCcw className="w-3.5 h-3.5" />, color: 'text-amber-600 bg-amber-50 border-amber-200' },
   { id: 'ai_knowledge', name: 'AI / Agent 知识', icon: <Cpu className="w-3.5 h-3.5" />, color: 'text-purple-600 bg-purple-50 border-purple-200' },
   { id: 'rules', name: '定位规则', icon: <Sliders className="w-3.5 h-3.5" />, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
   { id: 'boundary', name: '风险边界', icon: <ShieldAlert className="w-3.5 h-3.5" />, color: 'text-rose-600 bg-rose-50 border-rose-200' },
@@ -59,7 +59,7 @@ const CATEGORY_TABS: { id: AssetCategory | 'all'; name: string; icon: React.Reac
 const CATEGORY_NAMES: Record<AssetCategory, string> = {
   profile: '简历画像',
   evidence: '项目证据',
-  retro: '面试复盘',
+  retro: '面试复盘Q&A',
   ai_knowledge: 'AI / Agent 知识',
   rules: '定位规则',
   boundary: '风险边界',
@@ -1031,7 +1031,7 @@ export const AssetDrawer: React.FC<AssetDrawerProps> = ({
                     >
                       <option value="evidence">02_Projects (项目证据 - STAR真实项目)</option>
                       <option value="profile">01_Profile (简历画像 - 候选人人设)</option>
-                      <option value="retro">03_Interview_Retro (面试复盘 - 避坑总结)</option>
+                      <option value="retro">03_Interview_Retro (面试复盘Q&A - 追问/攻防/表达样例)</option>
                       <option value="ai_knowledge">AI_Knowledge (AI/Agent 知识参考)</option>
                       <option value="rules">Prompt_Templates (定位规则 - 表达原则)</option>
                       <option value="boundary">Risk_Boundaries (风险边界 - 严禁夸大)</option>

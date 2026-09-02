@@ -284,7 +284,7 @@ export const INITIAL_ASSET_DOCUMENTS: AssetDocument[] = [
     title: 'Retro_Tier1_Tech_AI_Lead.md',
     path: '03_Interviews/Retro_Tier1_Tech_AI_Lead.md',
     category: 'retro',
-    categoryName: '面试复盘',
+    categoryName: '面试复盘Q&A',
     updatedAt: '2026-08-15',
     tags: ['大厂终面复盘', '技术深度拷问', '选型权衡'],
     wordCount: 1650,

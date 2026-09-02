@@ -2214,7 +2214,7 @@ app.post("/api/rag-answer", async (req, res) => {
           },
           metadataFilter: {
             allowedCategories: ["profile", "evidence", "retro", "ai_knowledge", "rules", "boundary"],
-            categoryLabels: ["候选人画像", "项目证据", "面试复盘", "AI/Agent 知识", "岗位规则", "风险边界"],
+            categoryLabels: ["候选人画像", "项目证据", "面试复盘Q&A", "AI/Agent 知识", "岗位规则", "风险边界"],
             ontologyFilters: [],
             excludedTags: [],
             preFilteredDocsCount: docList.length
@@ -2470,7 +2470,7 @@ if (answerMode === "direct") {
             },
             metadataFilter: {
               allowedCategories: ["profile", "evidence", "retro", "ai_knowledge", "rules", "boundary"],
-              categoryLabels: ["简历画像", "项目证据", "面试复盘", "AI/Agent 知识", "定位规则", "风险边界"],
+              categoryLabels: ["简历画像", "项目证据", "面试复盘Q&A", "AI/Agent 知识", "定位规则", "风险边界"],
               ontologyFilters: [],
               excludedTags: [],
               preFilteredDocsCount: docList.length,
@@ -2723,7 +2723,7 @@ if (answerMode === "direct") {
         },
         metadataFilter: {
           allowedCategories: ["profile", "evidence", "retro", "ai_knowledge", "rules", "boundary"],
-          categoryLabels: ["简历画像", "项目证据", "面试复盘", "AI/Agent 知识", "定位规则", "风险边界"],
+          categoryLabels: ["简历画像", "项目证据", "面试复盘Q&A", "AI/Agent 知识", "定位规则", "风险边界"],
           ontologyFilters: ["CandidateProfile", "ProjectEvidence", "Capability", "RiskBoundary"],
           excludedTags: ["Confidential_Financials", "Unverified_PoC"],
           preFilteredDocsCount: docList.length,
@@ -2942,7 +2942,7 @@ function inferCategory(fileName: string, tags: string[], text: string, fmCategor
   const CATEGORY_MAP: Record<string, string> = {
     profile: "简历画像",
     evidence: "项目证据",
-    retro: "面试复盘",
+    retro: "面试复盘Q&A",
     ai_knowledge: "AI / Agent 知识",
     rules: "定位规则",
     boundary: "风险边界",
@@ -2965,7 +2965,7 @@ function inferCategory(fileName: string, tags: string[], text: string, fmCategor
     return { category: "rules", categoryName: "定位规则" };
   }
   if (combined.includes("03_interview") || combined.includes("retro") || combined.includes("复盘") || combined.includes("面试题") || combined.includes("qa") || combined.includes("反问")) {
-    return { category: "retro", categoryName: "面试复盘" };
+    return { category: "retro", categoryName: "面试复盘Q&A" };
   }
   if (combined.includes("04_aiagent") || combined.includes("ai_knowledge") || combined.includes("agent") || combined.includes("rag") || combined.includes("chunking") || combined.includes("rerank") || combined.includes("技术")) {
     return { category: "ai_knowledge", categoryName: "AI / Agent 知识" };
@@ -2978,7 +2978,7 @@ function inferCategory(fileName: string, tags: string[], text: string, fmCategor
 app.post("/api/process-doc", async (req, res) => {
   try {
     const { title, category, markdown } = req.body;
-    const ai = getOpenAIClient();
+    const ai = process.env.ENABLE_UPLOAD_MODEL_PARSING === "true" ? getOpenAIClient() : null;
 
     if (!title || !markdown) {
       return res.status(400).json({ error: "Title and markdown content are required." });
@@ -3119,7 +3119,7 @@ app.post("/api/parse-obsidian-md", async (req, res) => {
     const docId = `doc-obsidian-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const pathFormatted = fileName.includes("/") ? fileName : `${category}/${title}.md`;
 
-    const ai = getOpenAIClient();
+    const ai = process.env.ENABLE_UPLOAD_MODEL_PARSING === "true" ? getOpenAIClient() : null;
     if (ai) {
       const prompt = `你是一名专业 Career RAG 知识工程师。请对以下来自 Obsidian 知识库的文档进行深度本体抽取与语义切块：
 文件名: ${fileName}
@@ -3299,7 +3299,7 @@ app.post("/api/parse-pdf", async (req, res) => {
     const cleanBase64 = pdfBase64.replace(/^data:application\/pdf;base64,/, "").trim();
     const docId = `doc-pdf-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-    const ai = getOpenAIClient();
+    const ai = process.env.ENABLE_UPLOAD_MODEL_PARSING === "true" ? getOpenAIClient() : null;
     if (ai) {
       const prompt = `你是一名顶级 Career RAG 知识工程师与文档解析专家。请深度解析这份上传的 PDF 文档（简历、技术方案、项目总结或面试复盘），完成以下结构化抽取：
 文件名：${fileName}

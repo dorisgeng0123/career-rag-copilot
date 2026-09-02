@@ -26,7 +26,7 @@ interface BatchAssetUploaderProps {
 const CATEGORY_MAP: Record<AssetCategory, string> = {
   profile: '01_Profile (简历画像)',
   evidence: '02_Projects (项目证据)',
-  retro: '03_Interview (面试复盘)',
+  retro: '03_Interview (面试复盘Q&A)',
   ai_knowledge: '04_AIAgent (AI/Agent 知识)',
   rules: '05_Positioning (定位规则)',
   boundary: '06_Boundaries (风险边界)',

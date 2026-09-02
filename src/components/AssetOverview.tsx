@@ -65,7 +65,7 @@ export const AssetOverview: React.FC<AssetOverviewProps> = ({
     },
     {
       key: 'retro',
-      name: '面试复盘',
+      name: '面试复盘Q&A',
       enName: 'Interview Retro',
       icon: <History className="w-4 h-4 text-amber-600" />,
       iconBg: 'bg-amber-50 text-amber-600',

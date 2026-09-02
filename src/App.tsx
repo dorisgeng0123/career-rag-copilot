@@ -71,7 +71,7 @@ function createNoJDAnswer(taskMode: TaskMode, question: string): GroundedAnswer 
       },
       metadataFilter: {
         allowedCategories: ['profile', 'evidence', 'retro', 'ai_knowledge', 'rules', 'boundary'],
-        categoryLabels: ['候选人画像', '项目证据', '面试复盘', 'AI/Agent 知识', '岗位规则', '风险边界'],
+        categoryLabels: ['候选人画像', '项目证据', '面试复盘Q&A', 'AI/Agent 知识', '岗位规则', '风险边界'],
         ontologyFilters: [],
         excludedTags: [],
         preFilteredDocsCount: 0

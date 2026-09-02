@@ -31,7 +31,7 @@ type QuestionIntent =
 const CATEGORY_LABELS: Record<string, string> = {
   profile: '简历画像',
   evidence: '项目证据',
-  retro: '面试复盘',
+  retro: '面试复盘Q&A',
   ai_knowledge: 'AI/Agent 知识',
   rules: '定位规则',
   boundary: '风险边界'
@@ -317,7 +317,7 @@ export function generateDynamicGroundedAnswer(
     },
     metadataFilter: {
       allowedCategories: ['profile', 'evidence', 'retro', 'ai_knowledge', 'rules', 'boundary'],
-      categoryLabels: ['简历画像', '项目证据', '面试复盘', 'AI/Agent 知识', '定位规则', '风险边界'],
+      categoryLabels: ['简历画像', '项目证据', '面试复盘Q&A', 'AI/Agent 知识', '定位规则', '风险边界'],
       ontologyFilters: Array.from(new Set([
         'CandidateProfile',
         'ProjectEvidence',

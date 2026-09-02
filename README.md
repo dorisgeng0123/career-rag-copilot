@@ -50,9 +50,9 @@ Career RAG Copilot 把这些材料组织成一个面试准备工作流，帮助�
 系统处理：
 
 1. 后端读取上传文件。
-2. 按文档类型解析正文。
-3. 根据资产类别切成语义 chunk。
-4. 为 chunk 写入类别、标签、来源路径、摘要等元数据。
+2. 按文档类型抽取文本。
+3. 根据标题、段落和 Q&A 结构做本地粗切 chunk。
+4. 按用户选择的资产类型写入大类标签，例如 evidence、retro、boundary。
 5. 保存到本地 SQLite 知识库。
 
 输出：
@@ -61,7 +61,7 @@ Career RAG Copilot 把这些材料组织成一个面试准备工作流，帮助�
 - 每份资产下的语义 chunk。
 - 后续回答生成时可使用的事实、few-shot 样例和边界材料。
 
-这里的重点是：上传资产不是简单存文件，而是把个人材料转成后续模型可调用的结构化上下文。
+这里的重点是：上传资产不是简单存文件，而是先快速转成后续可检索的上下文材料。上传阶段默认不调用大模型做深度摘要、复杂标签或本体抽取，避免文件上传过慢；大模型主要留在最终回答阶段做意图理解、材料取舍和表达组织。
 
 ### 3. Step 1：JD 解析
 
@@ -299,6 +299,7 @@ ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ZHIPU_MODEL=glm-4.5-air
 ZHIPU_VISION_MODEL=glm-ocr
 ZHIPU_THINKING_TYPE=enabled
+ENABLE_UPLOAD_MODEL_PARSING=false
 ```
 
 如果模型 API 不可用，项目会进入本地 fallback 逻辑，保证页面仍能展示基础流程。
@@ -317,7 +318,7 @@ ZHIPU_THINKING_TYPE=enabled
 
 - 结构化 JDContext
 - JD 相关面试问题推荐
-- 知识资产 chunk
+- 知识资产轻量 chunk
 - 问题路由信号
 - few-shot / evidence / boundary 上下文分桶
 - 面试回答
@@ -418,7 +419,20 @@ AI 项目面试里容易出现夸大风险，例如把 RAG 编排说成自研大
 - 在模型 system instruction 中明确写入事实边界。
 - 要求模型避免编造未出现在资产中的项目、指标、职责和产出。
 
-### 8. 本地 Demo 与线上部署的数据边界不同
+### 8. 上传解析速度与回答准确度的取舍
+
+早期上传阶段会尝试调用模型做文档分类、摘要、实体抽取和语义切块，PDF 上传尤其慢。对于面试 Demo 来说，上传体验比上传时的深度结构化更重要。
+
+解决方式：
+
+- 上传阶段默认不调用模型。
+- Markdown / TXT / PDF 先做本地文本抽取。
+- 按标题、段落和 Q&A 结构做轻量粗切 chunk。
+- 按用户选择的资产类型或文件线索打大类标签。
+- 回答阶段再由规则宽召回 chunk，并把候选 chunk 交给大模型做细致理解和回答组织。
+- 如确实需要上传阶段模型深度解析，可以设置 `ENABLE_UPLOAD_MODEL_PARSING=true` 作为可选高级模式。
+
+### 9. 本地 Demo 与线上部署的数据边界不同
 
 本地运行时，用户上传的资产会写入本地 SQLite 文件；但部署到 Render 后，如果不配置持久磁盘，线上上传文件不保证长期保存。
 
@@ -429,7 +443,7 @@ AI 项目面试里容易出现夸大风险，例如把 RAG 编排说成自研大
 - Render 部署先支持 Demo 试用。
 - 如果后续要做正式多人使用，需要接入持久化数据库、对象存储和登录权限。
 
-### 9. 部署端口兼容
+### 10. 部署端口兼容
 
 本地开发可以固定使用 `3000`，但 Render 这类平台会通过环境变量分配端口。如果后端写死端口，部署后服务可能无法启动。
 
@@ -540,6 +554,7 @@ ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ZHIPU_MODEL=glm-4.5-air
 ZHIPU_VISION_MODEL=glm-ocr
 ZHIPU_THINKING_TYPE=enabled
+ENABLE_UPLOAD_MODEL_PARSING=false
 ```
 
 说明：
