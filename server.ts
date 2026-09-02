@@ -463,6 +463,14 @@ function getModelProviderLabel() {
   return "OpenAI";
 }
 
+function getZhipuThinkingType(modelName: string) {
+  const configured = String(process.env.ZHIPU_THINKING_TYPE || "").toLowerCase();
+  if (/air/i.test(modelName) && configured !== "force_enabled") {
+    return "disabled";
+  }
+  return configured === "enabled" ? "enabled" : "disabled";
+}
+
 function extractTextFromModelContents(contents: any): string {
   if (typeof contents === "string") return contents;
   if (Array.isArray(contents)) {
@@ -536,7 +544,7 @@ async function callOpenAIJson(contents: any, options: { temperature?: number; fo
     requestBody.response_format = { type: "json_object" };
   }
   if (config.provider === "zhipu") {
-    const thinkingType = process.env.ZHIPU_THINKING_TYPE || (/air/i.test(requestBody.model) ? "disabled" : "enabled");
+    const thinkingType = getZhipuThinkingType(requestBody.model);
     requestBody.thinking = thinkingType === "enabled"
       ? { type: "enabled", clear_thinking: true }
       : { type: "disabled" };
@@ -546,7 +554,7 @@ async function callOpenAIJson(contents: any, options: { temperature?: number; fo
   }
 
   const controller = new AbortController();
-  const timeoutMs = Number(process.env.MODEL_REQUEST_TIMEOUT_MS || 45000);
+  const timeoutMs = Number(process.env.MODEL_REQUEST_TIMEOUT_MS || 90000);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetchOpenAI(`${config.baseURL}/chat/completions`, {
@@ -605,7 +613,18 @@ function parseModelJson(text: string) {
 
 function parseDirectModelOutput(text: string) {
   try {
-    return parseModelJson(text);
+    const parsed = parseModelJson(text);
+    const answerText = extractDirectAnswerText(parsed) || extractDirectAnswerText(text);
+    if (answerText) {
+      return {
+        ...(typeof parsed === "object" && parsed !== null ? parsed : {}),
+        strategy: parsed?.strategy || parsed?.title || "直接模型回答：已从模型返回内容中提取可用回答。",
+        recommendedAnswer: answerText,
+        evidenceSummary: Array.isArray(parsed?.evidenceSummary) ? parsed.evidenceSummary : [],
+        riskNotices: Array.isArray(parsed?.riskNotices) ? parsed.riskNotices : [],
+      };
+    }
+    return parsed;
   } catch {
     const raw = String(text || "")
       .replace(/^```(?:json)?\s*/i, "")
@@ -628,6 +647,60 @@ function parseDirectModelOutput(text: string) {
       riskNotices: ["模型返回格式不严格，本次保留直答正文，不回退到 RAG 模板。"],
     };
   }
+}
+
+function extractDirectAnswerText(value: any): string {
+  const preferredKeys = [
+    "recommendedAnswer",
+    "answer",
+    "content",
+    "text",
+    "output",
+    "response",
+    "result",
+    "message",
+  ];
+  const seen = new Set<any>();
+
+  const visit = (node: any): string => {
+    if (node == null || seen.has(node)) return "";
+    if (typeof node === "string") {
+      const cleaned = node
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+      if (!cleaned) return "";
+      if (/^\{[\s\S]*\}$/.test(cleaned) || /^\[[\s\S]*]$/.test(cleaned)) {
+        try {
+          return visit(JSON.parse(cleaned));
+        } catch {
+          return cleaned.length >= 20 ? cleaned : "";
+        }
+      }
+      return cleaned.length >= 20 ? cleaned : "";
+    }
+    if (typeof node !== "object") return "";
+    seen.add(node);
+
+    for (const key of preferredKeys) {
+      const result = visit(node[key]);
+      if (result) return result;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const result = visit(child);
+        if (result) return result;
+      }
+      return "";
+    }
+    for (const child of Object.values(node)) {
+      const result = visit(child);
+      if (result) return result;
+    }
+    return "";
+  };
+
+  return visit(value);
 }
 
 function extractOcrTextFromPayload(payload: any): string {
@@ -741,7 +814,7 @@ async function checkOpenAIConnectivity() {
             messages: [{ role: "user", content: "Return JSON: {\"ok\":true}" }],
             temperature: 0.01,
             max_tokens: 16,
-            thinking: (process.env.ZHIPU_THINKING_TYPE || (/air/i.test(config.model) ? "disabled" : "enabled")) === "enabled"
+            thinking: getZhipuThinkingType(config.model) === "enabled"
               ? { type: "enabled", clear_thinking: true }
               : { type: "disabled" },
             ...(/^glm-5/i.test(config.model)
@@ -2558,7 +2631,7 @@ app.post("/api/rag-answer", async (req, res) => {
             `[Ref ${idx + 1}] 文档: ${c.docTitle} (分类: ${c.categoryName}, 标签: ${c.ontologyTags.join(", ")})\n内容摘要: ${c.content}`
         )
         .join("\n\n");
-      const directContextChunksText = citations
+      const directContextChunksText = citations.slice(0, 8)
         .map((c, idx) => {
           const role = c.evidenceRole || c.chunkType || c.categoryName || c.category || "素材";
           const content = String(c.content || "").replace(/\s+/g, " ").slice(0, 520);
@@ -2689,13 +2762,7 @@ if (answerMode === "direct") {
         });
 
         const parsedDirect = parseDirectModelOutput(directResponse.text);
-        const directRecommendedAnswer = String(
-          parsedDirect.recommendedAnswer ||
-          parsedDirect.answer ||
-          parsedDirect.content ||
-          parsedDirect.text ||
-          ""
-        ).trim();
+        const directRecommendedAnswer = extractDirectAnswerText(parsedDirect) || extractDirectAnswerText(directResponse.text);
         if (!directRecommendedAnswer) {
           throw new Error(`${getModelProviderLabel()} direct answer returned empty content.`);
         }

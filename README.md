@@ -300,12 +300,14 @@ ZHIPU_API_KEY=your_api_key_here
 ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ZHIPU_MODEL=glm-4.5-air
 ZHIPU_VISION_MODEL=glm-ocr
-ZHIPU_THINKING_TYPE=enabled
-MODEL_REQUEST_TIMEOUT_MS=45000
+ZHIPU_THINKING_TYPE=disabled
+MODEL_REQUEST_TIMEOUT_MS=90000
 ENABLE_UPLOAD_MODEL_PARSING=false
 ```
 
 如果模型 API 不可用，项目会进入本地 fallback 逻辑，保证页面仍能展示基础流程。
+
+线上默认把 `glm-4.5-air` 的 thinking 关闭，并将模型请求超时时间放宽到 90 秒。这样做是为了降低 Render 环境下的慢响应和空返回概率：RAG/chunk 负责提前缩小上下文范围，最终回答阶段优先保证稳定输出，而不是让模型在每次回答时做过重推理。
 
 ## 输入与输出
 
@@ -556,8 +558,8 @@ ZHIPU_API_KEY=your_api_key_here
 ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ZHIPU_MODEL=glm-4.5-air
 ZHIPU_VISION_MODEL=glm-ocr
-ZHIPU_THINKING_TYPE=enabled
-MODEL_REQUEST_TIMEOUT_MS=45000
+ZHIPU_THINKING_TYPE=disabled
+MODEL_REQUEST_TIMEOUT_MS=90000
 ENABLE_UPLOAD_MODEL_PARSING=false
 ```
 
