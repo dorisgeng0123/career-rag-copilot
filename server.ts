@@ -30,7 +30,7 @@ if (!process.env.OPENAI_PROXY_URL) {
 }
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "career-rag-copilot.sqlite");
 let dbPromise: Promise<Database> | null = null;
